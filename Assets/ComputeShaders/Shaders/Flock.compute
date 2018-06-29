@@ -1,0 +1,92 @@
+﻿struct Fish {
+	float3 pos;
+	float mass;
+	float3 vel;
+	float padding;
+};
+
+StructuredBuffer<Fish> _SourceFish;
+RWStructuredBuffer<Fish> _TargetFish;
+
+float _MaxSpeed;
+float _MaxTurnSpeed;
+float _NeighbouringDistance;
+float _SeperationDistance;
+float3 _TargetPos;
+int _FishCount;
+
+float _DeltaTime;
+
+float3 SeekTarget(Fish fish, float3 targetPos) {
+	float3 desiredVel = targetPos - fish.pos;
+	if (dot(desiredVel, desiredVel) > 0) {
+		desiredVel = normalize(desiredVel) * _MaxSpeed;
+	}
+
+	float3 desiredTurn = desiredVel - fish.vel;
+	if (dot(desiredTurn, desiredTurn) > _MaxTurnSpeed * _MaxTurnSpeed) {
+		desiredTurn = normalize(desiredTurn) * _MaxTurnSpeed;
+	}
+
+	return desiredTurn;
+}
+
+float3 Flock(Fish fish, int id) {
+	float3 seperateForce = float3(0,0,0);
+	float3 alignForce = float3(0,0,0);
+	int neighbourCount = 0;
+	[loop]
+	for (int i = 0; i < _FishCount; i++) {
+		if (i != id) {
+			Fish otherFish = _SourceFish[i];
+			float3 fishLine = fish.pos - otherFish.pos;
+			float lineLength = length(fishLine);
+
+			if (lineLength < _NeighbouringDistance && lineLength > 0) {
+				neighbourCount ++;
+
+				if (lineLength < _SeperationDistance) {
+					seperateForce += normalize(fishLine) * _SeperationDistance;
+				}
+				alignForce += otherFish.vel;
+			}
+		}
+	}
+
+	if (neighbourCount > 0) {
+		if (dot(seperateForce, seperateForce) > 0) {
+			seperateForce = normalize(seperateForce) * min(_MaxSpeed, _MaxTurnSpeed);
+		}
+		alignForce /= neighbourCount;
+		if (dot(alignForce, alignForce) > min(_MaxSpeed, _MaxTurnSpeed)) {
+			alignForce = normalize(alignForce) * min(_MaxSpeed, _MaxTurnSpeed);
+		}
+	}
+	return seperateForce + alignForce;
+}
+
+#pragma kernel CSMain
+[numthreads(128,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID) {
+	if (id.x >= _FishCount) {
+		return;
+	}
+	Fish fish = _SourceFish[id.x];
+
+	float3 accel = float3(0,0,0);
+	accel += SeekTarget(fish, _TargetPos);
+	accel += Flock(fish, id.x);
+
+
+	accel /= fish.mass;
+
+	fish.vel += accel;
+
+	if (dot(fish.vel, fish.vel) > _MaxSpeed * _MaxSpeed) {
+		fish.vel = normalize(fish.vel) * _MaxSpeed;
+	}
+
+	fish.pos += fish.vel * _DeltaTime;
+
+	_TargetFish[id.x] = fish;
+}
